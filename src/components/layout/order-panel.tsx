@@ -1,9 +1,16 @@
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Minus, Plus, Trash2 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { TableSelectDialog } from '@/components/ui/table-select-dialog'
+import { AlertDialog } from '@/components/ui/confirm-dialog'
 import { useCartStore, type CartItem } from '@/stores/cart.store'
+import { apiClient, endpoints } from '@/lib/api'
+import type { CostCenter, Order, CreateOrderInput } from '@/types/api.types'
 
 interface OrderItemRowProps {
   item: CartItem
@@ -61,19 +68,62 @@ function OrderItemRow({ item, onIncrement, onDecrement, onRemove }: OrderItemRow
 
 interface OrderPanelProps {
   className?: string
-  onPay?: () => void
-  onHold?: () => void
 }
 
-export function OrderPanel({ className, onPay, onHold }: OrderPanelProps) {
+// Default terminal ID (should come from auth/config in production)
+const DEFAULT_TERMINAL_ID = 'terminal-001'
+
+export function OrderPanel({ className }: OrderPanelProps) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
   const {
     items,
     tableNumber,
+    costCenterId,
     totals,
     updateQuantity,
     removeItem,
+    setTable,
     clear,
   } = useCartStore()
+
+  // Dialog states
+  const [showTableSelect, setShowTableSelect] = useState(false)
+  const [alertDialog, setAlertDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    variant: 'success' | 'destructive' | 'warning'
+  }>({ open: false, title: '', message: '', variant: 'success' })
+
+  // Create order mutation (for Hold)
+  const createOrderMutation = useMutation({
+    mutationFn: async (input: CreateOrderInput) => {
+      const response = await apiClient.post<Order>(endpoints.orders.create, input)
+      return response.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      queryClient.invalidateQueries({ queryKey: ['cost-centers'] })
+      clear()
+      setAlertDialog({
+        open: true,
+        title: 'Order Held',
+        message: `Order placed for ${tableNumber}`,
+        variant: 'success',
+      })
+    },
+    onError: (error) => {
+      console.error('Failed to create order:', error)
+      setAlertDialog({
+        open: true,
+        title: 'Error',
+        message: 'Failed to place order. Please try again.',
+        variant: 'destructive',
+      })
+    },
+  })
 
   const handleIncrement = (itemId: string, currentQty: number) => {
     updateQuantity(itemId, currentQty + 1)
@@ -85,6 +135,46 @@ export function OrderPanel({ className, onPay, onHold }: OrderPanelProps) {
     } else {
       removeItem(itemId)
     }
+  }
+
+  // Handle Hold button - show table selection if no table selected
+  const handleHold = () => {
+    if (items.length === 0) return
+
+    if (!costCenterId) {
+      setShowTableSelect(true)
+    } else {
+      // Table already selected, create order directly
+      submitOrder(costCenterId)
+    }
+  }
+
+  // Handle table selection from dialog
+  const handleTableSelect = (table: CostCenter) => {
+    setTable(table.name, table.costCenterId)
+    setShowTableSelect(false)
+    submitOrder(table.costCenterId)
+  }
+
+  // Submit order to backend
+  const submitOrder = (targetCostCenterId: string) => {
+    createOrderMutation.mutate({
+      costCenterId: targetCostCenterId,
+      terminalId: DEFAULT_TERMINAL_ID,
+      items: items.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        notes: item.notes,
+      })),
+    })
+  }
+
+  // Handle Pay button - navigate to payment screen
+  const handlePay = () => {
+    if (items.length === 0) return
+    // For now, navigate to a payment flow (can be expanded later)
+    // TODO: Implement full payment flow with payment method selection
+    navigate('/payment')
   }
 
   return (
@@ -152,16 +242,16 @@ export function OrderPanel({ className, onPay, onHold }: OrderPanelProps) {
             variant="outline"
             size="touch"
             className="flex-1"
-            onClick={onHold}
-            disabled={items.length === 0}
+            onClick={handleHold}
+            disabled={items.length === 0 || createOrderMutation.isPending}
           >
-            Hold
+            {createOrderMutation.isPending ? 'Saving...' : 'Hold'}
           </Button>
           <Button
             variant="success"
             size="touch"
             className="flex-1"
-            onClick={onPay}
+            onClick={handlePay}
             disabled={items.length === 0}
           >
             Pay {formatCurrency(totals.grandTotal)}
@@ -179,6 +269,23 @@ export function OrderPanel({ className, onPay, onHold }: OrderPanelProps) {
           </Button>
         )}
       </div>
+
+      {/* Table Selection Dialog */}
+      <TableSelectDialog
+        open={showTableSelect}
+        onClose={() => setShowTableSelect(false)}
+        onSelect={handleTableSelect}
+        title="Hold Order - Select Table"
+      />
+
+      {/* Alert Dialog for feedback */}
+      <AlertDialog
+        open={alertDialog.open}
+        onClose={() => setAlertDialog((prev) => ({ ...prev, open: false }))}
+        title={alertDialog.title}
+        description={alertDialog.message}
+        variant={alertDialog.variant}
+      />
     </div>
   )
 }
