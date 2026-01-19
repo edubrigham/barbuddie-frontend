@@ -133,7 +133,7 @@ interface CategoryCardProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 const CategoryCard = React.forwardRef<HTMLDivElement, CategoryCardProps>(
-  ({ className, name, backgroundColor = '#3C9FFA', textColor = '#FFFFFF', onSelect, ...props }, ref) => {
+  ({ className, name, itemCount, backgroundColor = '#3C9FFA', textColor = '#FFFFFF', onSelect, ...props }, ref) => {
     return (
       <div
         ref={ref}

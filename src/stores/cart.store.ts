@@ -61,17 +61,19 @@ function calculateTotals(items: CartItem[]): CartTotals {
   }
 }
 
+// Helper to update state with recalculated totals
+const updateWithTotals = (items: CartItem[]) => ({
+  items,
+  totals: calculateTotals(items),
+})
+
 export const useCartStore = create<CartState>((set, get) => ({
   // Initial state
   items: [],
   tableNumber: null,
   costCenterId: null,
   notes: '',
-
-  // Computed totals (recalculated on access)
-  get totals() {
-    return calculateTotals(get().items)
-  },
+  totals: { subtotal: 0, vatAmount: 0, grandTotal: 0, itemCount: 0 },
 
   // Actions
   addItem: (itemData, quantity = 1) => {
@@ -82,33 +84,31 @@ export const useCartStore = create<CartState>((set, get) => ({
       (item) => item.productId === itemData.productId && item.size === itemData.size
     )
 
+    let newItems: CartItem[]
     if (existingIndex >= 0) {
       // Update quantity of existing item
-      const updated = [...items]
-      updated[existingIndex] = {
-        ...updated[existingIndex],
-        quantity: updated[existingIndex].quantity + quantity,
+      newItems = [...items]
+      newItems[existingIndex] = {
+        ...newItems[existingIndex],
+        quantity: newItems[existingIndex].quantity + quantity,
       }
-      set({ items: updated })
     } else {
       // Add new item
-      set({
-        items: [
-          ...items,
-          {
-            ...itemData,
-            id: generateId(),
-            quantity,
-          },
-        ],
-      })
+      newItems = [
+        ...items,
+        {
+          ...itemData,
+          id: generateId(),
+          quantity,
+        },
+      ]
     }
+    set(updateWithTotals(newItems))
   },
 
   removeItem: (itemId) => {
-    set((state) => ({
-      items: state.items.filter((item) => item.id !== itemId),
-    }))
+    const newItems = get().items.filter((item) => item.id !== itemId)
+    set(updateWithTotals(newItems))
   },
 
   updateQuantity: (itemId, quantity) => {
@@ -117,19 +117,17 @@ export const useCartStore = create<CartState>((set, get) => ({
       return
     }
 
-    set((state) => ({
-      items: state.items.map((item) =>
-        item.id === itemId ? { ...item, quantity } : item
-      ),
-    }))
+    const newItems = get().items.map((item) =>
+      item.id === itemId ? { ...item, quantity } : item
+    )
+    set(updateWithTotals(newItems))
   },
 
   updateNotes: (itemId, notes) => {
-    set((state) => ({
-      items: state.items.map((item) =>
-        item.id === itemId ? { ...item, notes } : item
-      ),
-    }))
+    const newItems = get().items.map((item) =>
+      item.id === itemId ? { ...item, notes } : item
+    )
+    set(updateWithTotals(newItems))
   },
 
   setTable: (tableNumber, costCenterId) => {
@@ -146,6 +144,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       tableNumber: null,
       costCenterId: null,
       notes: '',
+      totals: { subtotal: 0, vatAmount: 0, grandTotal: 0, itemCount: 0 },
     })
   },
 }))

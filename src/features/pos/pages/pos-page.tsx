@@ -47,7 +47,7 @@ export function POSPage() {
       : product.unitPrice
 
     addItem({
-      productId: product.id,
+      productId: product.productId,
       name: product.name,
       price,
       vatLabel: product.vatLabel,

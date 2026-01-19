@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Minus, Plus, Trash2 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -10,7 +10,7 @@ import { TableSelectDialog } from '@/components/ui/table-select-dialog'
 import { AlertDialog } from '@/components/ui/confirm-dialog'
 import { useCartStore, type CartItem } from '@/stores/cart.store'
 import { apiClient, endpoints } from '@/lib/api'
-import type { CostCenter, Order, CreateOrderInput } from '@/types/api.types'
+import type { CostCenter, Order, CreateOrderInput, Terminal } from '@/types/api.types'
 
 interface OrderItemRowProps {
   item: CartItem
@@ -70,9 +70,6 @@ interface OrderPanelProps {
   className?: string
 }
 
-// Default terminal ID (should come from auth/config in production)
-const DEFAULT_TERMINAL_ID = 'terminal-001'
-
 export function OrderPanel({ className }: OrderPanelProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -87,6 +84,18 @@ export function OrderPanel({ className }: OrderPanelProps) {
     setTable,
     clear,
   } = useCartStore()
+
+  // Fetch terminals to get a valid terminal ID
+  const { data: terminals } = useQuery({
+    queryKey: ['terminals'],
+    queryFn: async () => {
+      const response = await apiClient.get<Terminal[]>(endpoints.terminals.list)
+      return response.data
+    },
+  })
+
+  // Get the first active terminal
+  const activeTerminal = terminals?.find((t) => t.isActive) || terminals?.[0]
 
   // Dialog states
   const [showTableSelect, setShowTableSelect] = useState(false)
@@ -158,9 +167,19 @@ export function OrderPanel({ className }: OrderPanelProps) {
 
   // Submit order to backend
   const submitOrder = (targetCostCenterId: string) => {
+    if (!activeTerminal) {
+      setAlertDialog({
+        open: true,
+        title: 'Error',
+        message: 'No terminal configured. Please set up a terminal in settings.',
+        variant: 'destructive',
+      })
+      return
+    }
+
     createOrderMutation.mutate({
       costCenterId: targetCostCenterId,
-      terminalId: DEFAULT_TERMINAL_ID,
+      terminalId: activeTerminal.id,
       items: items.map((item) => ({
         productId: item.productId,
         quantity: item.quantity,
@@ -254,7 +273,7 @@ export function OrderPanel({ className }: OrderPanelProps) {
             onClick={handlePay}
             disabled={items.length === 0}
           >
-            Pay {formatCurrency(totals.grandTotal)}
+            Pay
           </Button>
         </div>
 
