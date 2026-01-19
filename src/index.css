@@ -1,0 +1,169 @@
+@import "tailwindcss";
+
+/* Custom theme configuration for BARBUDDIE POS */
+@theme {
+  /* Colors - Brand */
+  --color-primary: #3C9FFA;
+  --color-primary-foreground: #FFFFFF;
+  --color-success: #00A65A;
+  --color-success-foreground: #FFFFFF;
+  --color-danger: #EB5757;
+  --color-danger-foreground: #FFFFFF;
+  --color-warning: #F39C12;
+  --color-warning-foreground: #FFFFFF;
+
+  /* Colors - UI (Light theme) */
+  --color-background: #FAFAFA;
+  --color-foreground: #1A1A2E;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1A1A2E;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-border: #E5E7EB;
+  --color-input: #E5E7EB;
+  --color-ring: #3C9FFA;
+
+  /* Colors - Status */
+  --color-status-pending: #FFA500;
+  --color-status-in-progress: #3C9FFA;
+  --color-status-prepared: #9B59B6;
+  --color-status-done: #00A65A;
+  --color-status-paid: #00A65A;
+  --color-status-cancelled: #EB5757;
+
+  /* Colors - Tables */
+  --color-table-available: #E8F5E9;
+  --color-table-occupied: #FFEBEE;
+  --color-table-has-order: #E3F2FD;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Spacing - Touch targets */
+  --spacing-touch: 44px;
+  --spacing-touch-lg: 56px;
+
+  /* Layout dimensions */
+  --width-sidebar: 65px;
+  --width-drawer: 280px;
+  --width-order-panel: 360px;
+  --width-product-card: 140px;
+  --height-product-card: 143px;
+
+  /* Border radius */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  /* Animations */
+  --animate-slide-in: slide-in 0.3s ease-out;
+  --animate-slide-out: slide-out 0.3s ease-in;
+  --animate-fade-in: fade-in 0.2s ease-out;
+
+  @keyframes slide-in {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+
+  @keyframes slide-out {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/* Dark theme */
+.dark {
+  --color-background: #1A1A2E;
+  --color-foreground: #F9FAFB;
+  --color-card: #2D2D44;
+  --color-card-foreground: #F9FAFB;
+  --color-muted: #374151;
+  --color-muted-foreground: #9CA3AF;
+  --color-border: #4B5563;
+  --color-input: #4B5563;
+}
+
+/* Base styles */
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Prevent text selection on touch interfaces */
+  -webkit-user-select: none;
+  user-select: none;
+  /* Prevent pull-to-refresh */
+  overscroll-behavior: none;
+}
+
+/* Allow text selection in inputs */
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Touch optimization utilities */
+.touch-manipulation {
+  touch-action: manipulation;
+}
+
+.touch-target {
+  min-height: var(--spacing-touch);
+  min-width: var(--spacing-touch);
+}
+
+.touch-target-lg {
+  min-height: var(--spacing-touch-lg);
+  min-width: var(--spacing-touch-lg);
+}
+
+/* Hide scrollbar but keep functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom scrollbar for visible areas */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--color-muted-foreground);
+  border-radius: 3px;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
