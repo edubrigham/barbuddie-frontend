@@ -29,8 +29,11 @@ const queryClient = new QueryClient({
 // Protected Route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const accessToken = useAuthStore((state) => state.accessToken)
 
-  if (!isAuthenticated) {
+  // Check both isAuthenticated flag and accessToken presence
+  // This handles the case where hydration restores the token before the flag
+  if (!isAuthenticated && !accessToken) {
     return <Navigate to="/login" replace />
   }
 

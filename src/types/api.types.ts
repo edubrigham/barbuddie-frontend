@@ -228,6 +228,7 @@ export interface Sale {
 export interface CreateSaleInput {
   terminalId: string
   orderId?: string
+  orderIds?: string[] // For settling multiple orders (e.g., all orders on a table)
   items: {
     productId: string
     quantity: number

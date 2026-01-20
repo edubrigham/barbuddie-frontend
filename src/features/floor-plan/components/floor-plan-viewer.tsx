@@ -1,7 +1,6 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import * as fabric from 'fabric'
 import { cn } from '@/lib/utils'
-import { GRID_SIZE, createGridLines } from '../utils/fabric-helpers'
 
 interface TableStatus {
   costCenterId: string
@@ -28,135 +27,193 @@ export function FloorPlanViewer({
   className,
 }: FloorPlanViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const fabricRef = useRef<fabric.Canvas | null>(null)
+  const [canvas, setCanvas] = useState<fabric.Canvas | null>(null)
 
-  // Update table colors based on status
-  const updateTableColors = useCallback((canvas: fabric.Canvas) => {
-    if (!tableStatuses) return
-
-    canvas.getObjects().forEach((obj) => {
-      const data = (obj as any).data
-      if (data?.type === 'table') {
-        const status = tableStatuses.get(data.tableNumber)
-        const isOccupied = status?.hasOpenOrders || false
-
-        // Find the shape inside the group
-        if (obj instanceof fabric.Group) {
-          const objects = obj.getObjects()
-          const shape = objects.find(
-            (o) => o instanceof fabric.Rect || o instanceof fabric.Circle || o instanceof fabric.Polygon
-          )
-          if (shape) {
-            shape.set({
-              fill: isOccupied ? '#fee2e2' : '#dcfce7', // red-100 or green-100
-              stroke: isOccupied ? '#ef4444' : '#22c55e', // red-500 or green-500
-            })
-          }
-          // Update text color
-          const text = objects.find((o) => o instanceof fabric.IText || o instanceof fabric.Text)
-          if (text) {
-            text.set({
-              fill: isOccupied ? '#b91c1c' : '#15803d', // red-700 or green-700
-            })
-          }
-        }
-      }
-    })
-
-    canvas.renderAll()
-  }, [tableStatuses])
-
-  // Initialize canvas
+  // Initialize canvas once
   useEffect(() => {
     if (!canvasRef.current) return
 
-    // Dispose existing canvas
-    if (fabricRef.current) {
-      fabricRef.current.dispose()
-      fabricRef.current = null
-    }
+    // Set canvas element dimensions first
+    canvasRef.current.width = width
+    canvasRef.current.height = height
 
-    const canvas = new fabric.Canvas(canvasRef.current, {
+    const fabricCanvas = new fabric.Canvas(canvasRef.current, {
       width,
       height,
       backgroundColor: '#f8fafc',
-      selection: false, // Disable multi-selection
+      selection: false, // Read-only: no selection allowed
     })
 
-    fabricRef.current = canvas
+    fabricCanvas.hoverCursor = 'pointer'
+    fabricCanvas.renderAll()
 
-    // Load the floor plan JSON
-    if (canvasJson) {
-      canvas.loadFromJSON(canvasJson as object).then(() => {
-        // Make all objects non-editable
-        canvas.getObjects().forEach((obj) => {
-          obj.set({
-            selectable: false,
-            evented: true, // Still allow click events
-            hoverCursor: 'pointer',
-          })
+    console.log('Canvas initialized:', width, 'x', height)
 
-          // Make grid lines non-interactive
-          const data = (obj as any).data
-          if (!data?.type) {
-            obj.set({ evented: false, hoverCursor: 'default' })
-          }
-        })
-
-        // Update colors based on status
-        updateTableColors(canvas)
-        canvas.renderAll()
-      })
-    } else {
-      // No floor plan - add grid lines only
-      const gridLines = createGridLines(width, height, GRID_SIZE)
-      gridLines.forEach((line) => {
-        line.set({ evented: false })
-        canvas.add(line)
-      })
-      canvas.renderAll()
-    }
-
-    // Handle table clicks
-    canvas.on('mouse:down', (e) => {
-      if (!e.target) return
-      const data = (e.target as any).data
-      if (data?.type === 'table' && onTableClick) {
-        onTableClick(data.tableNumber)
-      }
-    })
-
-    // Hover effect
-    canvas.on('mouse:over', (e) => {
-      if (!e.target) return
-      const data = (e.target as any).data
-      if (data?.type === 'table') {
-        e.target.set({ opacity: 0.8 })
-        canvas.renderAll()
-      }
-    })
-
-    canvas.on('mouse:out', (e) => {
-      if (!e.target) return
-      const data = (e.target as any).data
-      if (data?.type === 'table') {
-        e.target.set({ opacity: 1 })
-        canvas.renderAll()
-      }
-    })
+    setCanvas(fabricCanvas)
 
     return () => {
-      canvas.dispose()
-      fabricRef.current = null
+      fabricCanvas.dispose()
     }
-  }, [canvasJson, width, height, onTableClick, updateTableColors])
+  }, [width, height])
 
-  // Update colors when statuses change
+  // Load canvas data when canvasJson changes
   useEffect(() => {
-    if (fabricRef.current) {
-      updateTableColors(fabricRef.current)
+    if (!canvas || !canvasJson) return
+
+    const json = canvasJson as { objects?: unknown[], version?: string, background?: string }
+
+    if (json.objects && Array.isArray(json.objects) && json.objects.length > 0) {
+      console.log('Loading canvasJson with', json.objects.length, 'objects')
+
+      // Fabric.js v6 uses Promises - load the full JSON
+      canvas.loadFromJSON(json).then(() => {
+        // Process objects AFTER loading (following old pattern)
+        const canvasObjects = canvas.getObjects()
+
+        console.log('Loaded objects:', canvasObjects.length)
+
+        for (let k = 0; k < canvasObjects.length; k++) {
+          const obj = canvasObjects[k]
+
+          // Check if it's a table (group type) - old pattern
+          if (obj.type === 'group') {
+            const group = obj as fabric.Group
+            const groupObjects = group.getObjects()
+
+            // Extract table number from text object inside group
+            const textObj = groupObjects.find(
+              (o) => o.type === 'i-text' || o.type === 'text'
+            ) as fabric.IText | fabric.FabricText | undefined
+
+            const tableNumber = textObj?.text || ''
+            console.log(`Table ${k}: type=group, text="${tableNumber}"`)
+
+            // Check if occupied using tableStatuses map
+            const isOccupied = tableStatuses?.get(tableNumber)?.hasOpenOrders || false
+
+            // Apply color coding (following old pattern)
+            const shapeObj = groupObjects.find(
+              (o) => o.type === 'circle' || o.type === 'rect' || o.type === 'polygon'
+            )
+
+            if (shapeObj) {
+              if (isOccupied) {
+                shapeObj.set({ stroke: '#EB5757', strokeWidth: 3, fill: '#FBEBE9' })
+              } else {
+                shapeObj.set({ stroke: '#00A65A', fill: '#DFF5E5', strokeWidth: 3 })
+              }
+            }
+
+            // Update text color for contrast
+            if (textObj) {
+              textObj.set({ fill: isOccupied ? '#EB5757' : '#00A65A' })
+            }
+          }
+
+          // Disable interactions (read-only viewer)
+          obj.set({
+            hasControls: false,
+            selectable: false,
+            hasBorders: false,
+            evented: obj.type === 'group', // Only groups (tables) are clickable
+          })
+        }
+
+        canvas.renderAll()
+      }).catch((err) => {
+        console.error('Failed to load canvas:', err)
+      })
     }
-  }, [tableStatuses, updateTableColors])
+  }, [canvas, canvasJson, tableStatuses])
+
+  // Handle click events - following old pattern
+  useEffect(() => {
+    if (!canvas) return
+
+    const handleMouseDown = (event: fabric.TPointerEventInfo<fabric.TPointerEvent>) => {
+      if (!event.target) return
+
+      const activeObject = event.target
+
+      // Check if it's a table (group type) - exactly like old system
+      if (activeObject.type === 'group') {
+        const group = activeObject as fabric.Group
+        const groupObjects = group.getObjects()
+
+        // Extract table number from text object inside group
+        const textObj = groupObjects.find(
+          (o) => o.type === 'i-text' || o.type === 'text'
+        ) as fabric.IText | fabric.FabricText | undefined
+
+        if (textObj?.text) {
+          const tableNumber = textObj.text
+          console.log('Table clicked:', tableNumber)
+
+          if (onTableClick) {
+            onTableClick(tableNumber)
+          }
+        }
+      }
+    }
+
+    canvas.on('mouse:down', handleMouseDown)
+
+    return () => {
+      canvas.off('mouse:down', handleMouseDown)
+    }
+  }, [canvas, onTableClick])
+
+  // Create a serialized key from tableStatuses for proper React dependency detection
+  const tableStatusesKey = tableStatuses
+    ? Array.from(tableStatuses.entries())
+        .map(([k, v]) => `${k}:${v.hasOpenOrders}`)
+        .join(',')
+    : ''
+
+  // Update colors when tableStatuses change (without reloading canvas)
+  useEffect(() => {
+    if (!canvas || !tableStatuses) return
+
+    console.log('Updating table colors, statuses:', tableStatusesKey)
+
+    const canvasObjects = canvas.getObjects()
+
+    for (const obj of canvasObjects) {
+      if (obj.type === 'group') {
+        const group = obj as fabric.Group
+        const groupObjects = group.getObjects()
+
+        // Extract table number
+        const textObj = groupObjects.find(
+          (o) => o.type === 'i-text' || o.type === 'text'
+        ) as fabric.IText | fabric.FabricText | undefined
+
+        const tableNumber = textObj?.text || ''
+        const isOccupied = tableStatuses.get(tableNumber)?.hasOpenOrders || false
+
+        console.log(`Table ${tableNumber}: isOccupied=${isOccupied}`)
+
+        // Update colors
+        const shapeObj = groupObjects.find(
+          (o) => o.type === 'circle' || o.type === 'rect' || o.type === 'polygon'
+        )
+
+        if (shapeObj) {
+          if (isOccupied) {
+            shapeObj.set({ stroke: '#EB5757', strokeWidth: 3, fill: '#FBEBE9' })
+          } else {
+            shapeObj.set({ stroke: '#00A65A', fill: '#DFF5E5', strokeWidth: 3 })
+          }
+        }
+
+        if (textObj) {
+          textObj.set({ fill: isOccupied ? '#EB5757' : '#00A65A' })
+        }
+      }
+    }
+
+    canvas.renderAll()
+  }, [canvas, tableStatusesKey, tableStatuses])
 
   return (
     <div className={cn('relative', className)}>

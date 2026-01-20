@@ -1,20 +1,46 @@
 import { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { apiClient, endpoints } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { TableOrdersSheet } from '@/components/ui/table-orders-sheet'
+import { TableSelectDialog } from '@/components/ui/table-select-dialog'
+import { PaymentDialog, type PaymentMethod } from '@/components/ui/payment-dialog'
+import { AlertDialog } from '@/components/ui/confirm-dialog'
+import { cn, formatCurrency, generateId } from '@/lib/utils'
 import { useCartStore } from '@/stores/cart.store'
 import { FloorPlanViewer } from '@/features/floor-plan/components/floor-plan-viewer'
 import { getFloorPlans } from '@/features/floor-plan/api/floor-plan.api'
-import type { CostCenterWithOrders } from '@/types/api.types'
+import type { CostCenterWithOrders, CostCenter, Terminal, Sale, CreateSaleInput } from '@/types/api.types'
 import { Settings, ShoppingCart } from 'lucide-react'
+
+// Payment method name mapping
+const PAYMENT_METHOD_NAMES: Record<PaymentMethod, string> = {
+  CASH: 'Cash',
+  CARD_DEBIT: 'Debit Card',
+  CARD_CREDIT: 'Credit Card',
+  MOBILE_PAYMENT: 'Mobile Payment',
+}
 
 export function TablesPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const setTable = useCartStore((state) => state.setTable)
+  const clearCart = useCartStore((state) => state.clear)
   const [selectedArea, setSelectedArea] = useState<string | null>(null)
+
+  // Dialog states
+  const [selectedTable, setSelectedTable] = useState<CostCenterWithOrders | null>(null)
+  const [showActionsDialog, setShowActionsDialog] = useState(false)
+  const [showChangeTableDialog, setShowChangeTableDialog] = useState(false)
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false)
+  const [alertDialog, setAlertDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    variant: 'success' | 'destructive' | 'warning'
+  }>({ open: false, title: '', message: '', variant: 'success' })
 
   // Fetch floor plans
   const { data: floorPlans, isLoading: loadingPlans } = useQuery({
@@ -23,7 +49,7 @@ export function TablesPage() {
   })
 
   // Fetch tables with order status
-  const { data: tables, isLoading: loadingTables } = useQuery({
+  const { data: tables, isLoading: loadingTables, refetch: refetchTables } = useQuery({
     queryKey: ['cost-centers', 'tables', 'with-orders'],
     queryFn: async () => {
       const response = await apiClient.get<CostCenterWithOrders[]>(
@@ -33,6 +59,17 @@ export function TablesPage() {
     },
     refetchInterval: 30000, // Refresh every 30 seconds
   })
+
+  // Fetch terminals
+  const { data: terminals } = useQuery({
+    queryKey: ['terminals'],
+    queryFn: async () => {
+      const response = await apiClient.get<Terminal[]>(endpoints.terminals.list)
+      return response.data
+    },
+  })
+
+  const activeTerminal = terminals?.find((t) => t.isActive) || terminals?.[0]
 
   // Set default selected area when floor plans load
   useMemo(() => {
@@ -48,6 +85,7 @@ export function TablesPage() {
   }, [selectedArea, floorPlans])
 
   // Build table status map for the viewer
+  // Keys include both costCenterId and various text formats the canvas might use
   const tableStatuses = useMemo(() => {
     if (!tables) return new Map()
     const map = new Map<string, {
@@ -58,23 +96,187 @@ export function TablesPage() {
     }>()
 
     tables.forEach((table) => {
-      map.set(table.costCenterId, {
+      const statusData = {
         costCenterId: table.costCenterId,
         hasOpenOrders: table.hasOpenOrders,
         totalAmount: table.totalAmount,
         orderCount: table.orders?.length || 0,
-      })
+      }
+
+      // Add with costCenterId as key (e.g., "T01")
+      map.set(table.costCenterId, statusData)
+
+      // Also add with name as key (e.g., "Table 1")
+      map.set(table.name, statusData)
+
+      // Add with just the numeric part as key (e.g., "1" or "01")
+      const numericPart = table.costCenterId.replace(/[^0-9]/g, '')
+      if (numericPart) {
+        map.set(numericPart, statusData)
+        map.set(`T${numericPart}`, statusData) // e.g., "T1"
+        map.set(`T0${numericPart}`, statusData) // e.g., "T01" (with leading zero)
+      }
     })
 
     return map
   }, [tables])
 
-  const handleTableClick = (tableNumber: string) => {
-    const table = tables?.find((t) => t.costCenterId === tableNumber)
-    if (table) {
+  // Create sale mutation (for Settle Bill)
+  const createSaleMutation = useMutation({
+    mutationFn: async (input: CreateSaleInput) => {
+      const response = await apiClient.post<Sale>(endpoints.sales.create, input)
+      return response.data
+    },
+    onSuccess: (sale) => {
+      queryClient.invalidateQueries({ queryKey: ['sales'] })
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      queryClient.invalidateQueries({ queryKey: ['cost-centers'] })
+      refetchTables()
+      setShowPaymentDialog(false)
+      setShowActionsDialog(false)
+      setSelectedTable(null)
+      setAlertDialog({
+        open: true,
+        title: 'Payment Complete',
+        message: `Ticket #${sale.posFiscalTicketNo} - ${formatCurrency(Number(sale.transactionTotal))}`,
+        variant: 'success',
+      })
+    },
+    onError: (error) => {
+      console.error('Failed to create sale:', error)
+      setAlertDialog({
+        open: true,
+        title: 'Payment Failed',
+        message: 'Failed to process payment. Please try again.',
+        variant: 'destructive',
+      })
+    },
+  })
+
+  // Handle table click - different behavior for empty vs occupied
+  const handleTableClick = (tableText: string) => {
+    console.log('Table clicked (text from canvas):', tableText)
+    console.log('Available tables:', tables?.map(t => ({ costCenterId: t.costCenterId, name: t.name })))
+
+    // The canvas stores table text like "T01" or "T1"
+    // Try to find by costCenterId (exact match), then by partial match
+    let table = tables?.find((t) => t.costCenterId === tableText)
+
+    // If not found, try matching without the "T" prefix or with normalized format
+    if (!table) {
+      const numericPart = tableText.replace(/[^0-9]/g, '')
+      table = tables?.find((t) => {
+        const tableCostCenterNumeric = t.costCenterId.replace(/[^0-9]/g, '')
+        return tableCostCenterNumeric === numericPart
+      })
+    }
+
+    // Also try matching by name
+    if (!table) {
+      table = tables?.find((t) => t.name === tableText || t.name.includes(tableText))
+    }
+
+    if (!table) {
+      console.log('Table not found for:', tableText)
+      return
+    }
+
+    console.log('Found table:', table.name, 'costCenterId:', table.costCenterId, 'hasOpenOrders:', table.hasOpenOrders)
+
+    if (table.hasOpenOrders) {
+      // Table has orders - show actions dialog
+      setSelectedTable(table)
+      setShowActionsDialog(true)
+    } else {
+      // Empty table - go directly to POS with table selected
+      clearCart()
       setTable(table.name, table.costCenterId)
       navigate('/pos')
     }
+  }
+
+  // Handle Add Items action
+  const handleAddItems = () => {
+    if (!selectedTable) return
+    setShowActionsDialog(false)
+    setTable(selectedTable.name, selectedTable.costCenterId)
+    navigate('/pos')
+  }
+
+  // Handle Change Table action
+  const handleChangeTable = () => {
+    setShowActionsDialog(false)
+    setShowChangeTableDialog(true)
+  }
+
+  // Handle table selection for change
+  const handleTableChangeSelect = (_newTable: CostCenter) => {
+    // TODO: Implement order transfer API call
+    // For now, just show a message
+    setShowChangeTableDialog(false)
+    setAlertDialog({
+      open: true,
+      title: 'Coming Soon',
+      message: 'Table change functionality will be available soon.',
+      variant: 'warning',
+    })
+  }
+
+  // Handle Settle Bill action
+  const handleSettleBill = () => {
+    setShowActionsDialog(false)
+    setShowPaymentDialog(true)
+  }
+
+  // Handle payment confirmation
+  const handlePaymentConfirm = (method: PaymentMethod, amountReceived?: number) => {
+    if (!selectedTable || !activeTerminal) {
+      setAlertDialog({
+        open: true,
+        title: 'Error',
+        message: 'Missing table or terminal information.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    // Collect all order line items from all orders on this table
+    const allItems: { productId: string; quantity: number }[] = []
+    selectedTable.orders?.forEach((order) => {
+      order.orderLines?.forEach((line) => {
+        allItems.push({
+          productId: line.productId,
+          quantity: Number(line.quantity),
+        })
+      })
+    })
+
+    if (allItems.length === 0) {
+      setAlertDialog({
+        open: true,
+        title: 'Error',
+        message: 'No items to settle.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    // Get all order IDs to mark them as PAID
+    const orderIds = selectedTable.orders?.map((order) => order.id) || []
+
+    createSaleMutation.mutate({
+      terminalId: activeTerminal.id,
+      orderIds, // Mark all orders on this table as PAID
+      items: allItems,
+      payments: [
+        {
+          id: generateId(),
+          name: PAYMENT_METHOD_NAMES[method],
+          type: method,
+          amount: amountReceived || selectedTable.totalAmount,
+        },
+      ],
+    })
   }
 
   const handleManageFloorPlans = () => {
@@ -82,6 +284,7 @@ export function TablesPage() {
   }
 
   const handleNewOrder = () => {
+    clearCart()
     navigate('/pos')
   }
 
@@ -214,6 +417,48 @@ export function TablesPage() {
           </div>
         )}
       </div>
+
+      {/* Table Orders Sheet (for occupied tables) */}
+      <TableOrdersSheet
+        open={showActionsDialog}
+        onClose={() => {
+          setShowActionsDialog(false)
+          setSelectedTable(null)
+        }}
+        table={selectedTable}
+        onAddItems={handleAddItems}
+        onChangeTable={handleChangeTable}
+        onSettleBill={handleSettleBill}
+      />
+
+      {/* Table Selection Dialog (for changing tables) */}
+      <TableSelectDialog
+        open={showChangeTableDialog}
+        onClose={() => setShowChangeTableDialog(false)}
+        onSelect={handleTableChangeSelect}
+        title="Move Order To"
+      />
+
+      {/* Payment Dialog (for settling bills) */}
+      <PaymentDialog
+        open={showPaymentDialog}
+        onClose={() => {
+          setShowPaymentDialog(false)
+          setShowActionsDialog(true)
+        }}
+        onConfirm={handlePaymentConfirm}
+        total={selectedTable?.totalAmount || 0}
+        isPending={createSaleMutation.isPending}
+      />
+
+      {/* Alert Dialog for feedback */}
+      <AlertDialog
+        open={alertDialog.open}
+        onClose={() => setAlertDialog((prev) => ({ ...prev, open: false }))}
+        title={alertDialog.title}
+        description={alertDialog.message}
+        variant={alertDialog.variant}
+      />
     </div>
   )
 }

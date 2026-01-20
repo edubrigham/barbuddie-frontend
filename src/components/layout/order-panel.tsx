@@ -1,16 +1,15 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
-import { Minus, Plus, Trash2 } from 'lucide-react'
-import { cn, formatCurrency } from '@/lib/utils'
+import { Minus, Plus, Trash2, ShoppingCart } from 'lucide-react'
+import { cn, formatCurrency, generateId } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
 import { TableSelectDialog } from '@/components/ui/table-select-dialog'
+import { PaymentDialog, type PaymentMethod } from '@/components/ui/payment-dialog'
 import { AlertDialog } from '@/components/ui/confirm-dialog'
 import { useCartStore, type CartItem } from '@/stores/cart.store'
 import { apiClient, endpoints } from '@/lib/api'
-import type { CostCenter, Order, CreateOrderInput, Terminal } from '@/types/api.types'
+import type { CostCenter, Order, CreateOrderInput, Terminal, Sale, CreateSaleInput } from '@/types/api.types'
 
 interface OrderItemRowProps {
   item: CartItem
@@ -20,46 +19,43 @@ interface OrderItemRowProps {
 }
 
 function OrderItemRow({ item, onIncrement, onDecrement, onRemove }: OrderItemRowProps) {
-  const itemName =
-    item.name.length > 15 ? `${item.name.slice(0, 10)}...` : item.name
-
   return (
-    <div className="flex w-full items-center gap-1 px-2 py-3">
+    <div className="flex w-full items-center gap-2 px-4 py-3">
       {/* Remove button */}
       <button
         onClick={onRemove}
-        className="h-8 w-8 flex items-center justify-center text-danger hover:bg-danger/10 rounded-full transition-colors touch-manipulation active:scale-95"
+        className="h-8 w-8 flex items-center justify-center text-red-500 rounded-full touch-manipulation active:scale-95 active:bg-red-50"
       >
         <Trash2 className="h-4 w-4" />
       </button>
 
       {/* Item info */}
-      <div className="flex-1 min-w-0 overflow-hidden">
-        <p className="text-sm font-medium truncate">{itemName}</p>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">{item.name}</p>
         {item.size && (
-          <p className="text-xs text-muted-foreground truncate">{item.size}</p>
+          <p className="text-xs text-muted-foreground">{item.size}</p>
         )}
       </div>
 
       {/* Quantity controls */}
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex items-center gap-1">
         <button
           onClick={onDecrement}
-          className="h-6 w-6 flex items-center justify-center bg-muted rounded-full touch-manipulation active:scale-95"
+          className="h-7 w-7 flex items-center justify-center bg-muted rounded-full touch-manipulation active:scale-95"
         >
           <Minus className="h-4 w-4" />
         </button>
-        <span className="w-8 text-center font-semibold">{item.quantity}</span>
+        <span className="w-8 text-center font-semibold text-sm">{item.quantity}</span>
         <button
           onClick={onIncrement}
-          className="h-6 w-6 flex items-center justify-center bg-primary text-white rounded-full touch-manipulation active:scale-95"
+          className="h-7 w-7 flex items-center justify-center bg-primary text-white rounded-full touch-manipulation active:scale-95"
         >
           <Plus className="h-4 w-4" />
         </button>
       </div>
 
       {/* Price */}
-      <p className="w-24 shrink-0 text-right font-semibold tabular-nums">
+      <p className="w-20 text-right font-semibold text-sm tabular-nums">
         {formatCurrency(item.price * item.quantity)}
       </p>
     </div>
@@ -70,8 +66,15 @@ interface OrderPanelProps {
   className?: string
 }
 
+// Payment method name mapping
+const PAYMENT_METHOD_NAMES: Record<PaymentMethod, string> = {
+  CASH: 'Cash',
+  CARD_DEBIT: 'Debit Card',
+  CARD_CREDIT: 'Credit Card',
+  MOBILE_PAYMENT: 'Mobile Payment',
+}
+
 export function OrderPanel({ className }: OrderPanelProps) {
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   const {
@@ -99,6 +102,7 @@ export function OrderPanel({ className }: OrderPanelProps) {
 
   // Dialog states
   const [showTableSelect, setShowTableSelect] = useState(false)
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false)
   const [alertDialog, setAlertDialog] = useState<{
     open: boolean
     title: string
@@ -129,6 +133,35 @@ export function OrderPanel({ className }: OrderPanelProps) {
         open: true,
         title: 'Error',
         message: 'Failed to place order. Please try again.',
+        variant: 'destructive',
+      })
+    },
+  })
+
+  // Create sale mutation (for Pay)
+  const createSaleMutation = useMutation({
+    mutationFn: async (input: CreateSaleInput) => {
+      const response = await apiClient.post<Sale>(endpoints.sales.create, input)
+      return response.data
+    },
+    onSuccess: (sale) => {
+      queryClient.invalidateQueries({ queryKey: ['sales'] })
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      clear()
+      setShowPaymentDialog(false)
+      setAlertDialog({
+        open: true,
+        title: 'Payment Complete',
+        message: `Ticket #${sale.posFiscalTicketNo} - ${formatCurrency(Number(sale.transactionTotal))}`,
+        variant: 'success',
+      })
+    },
+    onError: (error) => {
+      console.error('Failed to create sale:', error)
+      setAlertDialog({
+        open: true,
+        title: 'Payment Failed',
+        message: 'Failed to process payment. Please try again.',
         variant: 'destructive',
       })
     },
@@ -188,27 +221,72 @@ export function OrderPanel({ className }: OrderPanelProps) {
     })
   }
 
-  // Handle Pay button - navigate to payment screen
+  // Handle Pay button - show payment dialog
   const handlePay = () => {
     if (items.length === 0) return
-    // For now, navigate to a payment flow (can be expanded later)
-    // TODO: Implement full payment flow with payment method selection
-    navigate('/payment')
+    setShowPaymentDialog(true)
   }
+
+  // Handle payment confirmation
+  const handlePaymentConfirm = (method: PaymentMethod, amountReceived?: number) => {
+    if (!activeTerminal) {
+      setAlertDialog({
+        open: true,
+        title: 'Error',
+        message: 'No terminal configured. Please set up a terminal in settings.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    createSaleMutation.mutate({
+      terminalId: activeTerminal.id,
+      items: items.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+      })),
+      payments: [
+        {
+          id: generateId(),
+          name: PAYMENT_METHOD_NAMES[method],
+          type: method,
+          amount: amountReceived || totals.grandTotal,
+        },
+      ],
+    })
+  }
+
+  // Header background color - red when table selected (like occupied), primary when new order
+  const hasTable = !!tableNumber
+  const headerBgClass = hasTable ? 'bg-blue-500' : 'bg-primary'
 
   return (
     <div className={cn('h-full bg-card border-l flex flex-col', className)}>
-      {/* Header */}
-      <div className="h-16 px-4 flex items-center justify-between border-b bg-primary text-white">
-        <div>
-          <p className="text-sm opacity-80">Table</p>
-          <p className="text-xl font-bold">{tableNumber || 'Not selected'}</p>
+      {/* Header - matches TableOrdersSheet style */}
+      <div className={cn('px-4 py-4 text-white', headerBgClass)}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold">
+            {tableNumber || 'New Order'}
+          </h2>
+          <div className="flex items-center gap-2">
+            <ShoppingCart className="w-5 h-5 opacity-80" />
+            <span className="text-lg font-bold">{totals.itemCount}</span>
+          </div>
         </div>
-        <div className="text-right">
-          <p className="text-sm opacity-80">Items</p>
-          <p className="text-xl font-bold">{totals.itemCount}</p>
-        </div>
+        <p className="text-sm text-white/80 mt-1">
+          {items.length} item{items.length !== 1 ? 's' : ''} - {formatCurrency(totals.grandTotal)}
+        </p>
       </div>
+
+      {/* Items list header */}
+      {items.length > 0 && (
+        <div className="grid grid-cols-[auto_1fr_auto_auto] gap-2 px-4 py-2 text-xs font-medium text-muted-foreground border-b bg-muted/30">
+          <span className="w-8"></span>
+          <span>Item</span>
+          <span className="w-24 text-center">Qty</span>
+          <span className="w-20 text-right">Price</span>
+        </div>
+      )}
 
       {/* Items list */}
       <ScrollArea className="flex-1">
@@ -233,60 +311,60 @@ export function OrderPanel({ className }: OrderPanelProps) {
         )}
       </ScrollArea>
 
-      {/* Footer with totals */}
-      <div className="border-t bg-muted/30 p-6">
-        {/* Subtotal */}
-        <div className="flex justify-between text-sm mb-1">
-          <span className="text-muted-foreground">Subtotal</span>
-          <span>{formatCurrency(totals.subtotal)}</span>
-        </div>
-
-        {/* VAT */}
-        <div className="flex justify-between text-sm mb-2">
-          <span className="text-muted-foreground">VAT</span>
-          <span>{formatCurrency(totals.vatAmount)}</span>
-        </div>
-
-        <Separator className="my-3" />
-
-        {/* Grand Total */}
-        <div className="flex justify-between text-lg font-bold mb-4">
-          <span>Total</span>
-          <span className="text-primary">{formatCurrency(totals.grandTotal)}</span>
+      {/* Footer - matches TableOrdersSheet style */}
+      <div className="border-t bg-muted/30">
+        {/* Totals */}
+        <div className="px-4 py-3 space-y-1">
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Subtotal</span>
+            <span>{formatCurrency(totals.subtotal)}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">VAT</span>
+            <span>{formatCurrency(totals.vatAmount)}</span>
+          </div>
+          <div className="flex justify-between items-center pt-2 border-t mt-2">
+            <span className="text-muted-foreground">Grand Total</span>
+            <span className="text-2xl font-bold text-primary">
+              {formatCurrency(totals.grandTotal)}
+            </span>
+          </div>
         </div>
 
         {/* Action buttons */}
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="touch"
-            className="flex-1"
-            onClick={handleHold}
-            disabled={items.length === 0 || createOrderMutation.isPending}
-          >
-            {createOrderMutation.isPending ? 'Saving...' : 'Hold'}
-          </Button>
-          <Button
-            variant="success"
-            size="touch"
-            className="flex-1"
-            onClick={handlePay}
-            disabled={items.length === 0}
-          >
-            Pay
-          </Button>
-        </div>
+        <div className="px-4 pb-4 space-y-2">
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="lg"
+              className="flex-1"
+              onClick={handleHold}
+              disabled={items.length === 0 || createOrderMutation.isPending}
+            >
+              {createOrderMutation.isPending ? 'Saving...' : 'Hold'}
+            </Button>
+            <Button
+              size="lg"
+              className="flex-1 bg-green-500 active:bg-green-600"
+              onClick={handlePay}
+              disabled={items.length === 0 || createSaleMutation.isPending}
+            >
+              Pay
+            </Button>
+          </div>
 
-        {/* Clear button */}
-        {items.length > 0 && (
-          <Button
-            size="touch"
-            className="w-full mt-3 bg-danger text-white"
-            onClick={clear}
-          >
-            Clear
-          </Button>
-        )}
+          {/* Clear button */}
+          {items.length > 0 && (
+            <Button
+              variant="outline"
+              size="lg"
+              className="w-full text-red-500 border-red-200 active:bg-red-50"
+              onClick={clear}
+            >
+              Clear Order
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Table Selection Dialog */}
@@ -295,6 +373,15 @@ export function OrderPanel({ className }: OrderPanelProps) {
         onClose={() => setShowTableSelect(false)}
         onSelect={handleTableSelect}
         title="Hold Order - Select Table"
+      />
+
+      {/* Payment Dialog */}
+      <PaymentDialog
+        open={showPaymentDialog}
+        onClose={() => setShowPaymentDialog(false)}
+        onConfirm={handlePaymentConfirm}
+        total={totals.grandTotal}
+        isPending={createSaleMutation.isPending}
       />
 
       {/* Alert Dialog for feedback */}

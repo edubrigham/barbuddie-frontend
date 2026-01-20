@@ -43,7 +43,7 @@ function SidebarButton({ icon: Icon, label, route, isActive }: SidebarButtonProp
         'touch-manipulation select-none active:scale-95',
         isActive
           ? 'bg-white/20 text-white'
-          : 'text-white/70 hover:bg-white/10 hover:text-white'
+          : 'text-white/70 active:bg-white/10 active:text-white'
       )}
     >
       <Icon className="h-6 w-6" />
@@ -93,7 +93,7 @@ export function Sidebar() {
           className={cn(
             'flex flex-col items-center justify-center w-14 h-14 rounded-xl transition-all duration-150',
             'touch-manipulation select-none active:scale-95',
-            'text-white/70 hover:bg-white/10 hover:text-white'
+            'text-white/70 active:bg-white/10 active:text-white'
           )}
         >
           <LogOut className="h-6 w-6" />
